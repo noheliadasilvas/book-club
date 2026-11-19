@@ -1,0 +1,12 @@
+[
+  { "type": "opinión polémica", "text": "¿Qué es más humillante: lo enorme que es el universo o lo diminutas que son las cosas de las que estamos hechos?" },
+  { "type": "¿qué prefieres?", "text": "¿Preferirías encogerte a la escala de Planck por un día o crecer hasta el tamaño de una galaxia? ¿Qué verías primero?" },
+  { "type": "explícalo", "text": "Explícale la idea más grande de esta semana a un niño de 10 años en dos frases." },
+  { "type": "mente explotada", "text": "¿Cuál fue el dato que más te voló la cabeza esta semana? Califícalo del 1 al 10 y defiende tu nota." },
+  { "type": "cambié de opinión", "text": "¿Algo de esta semana cambió lo que creías antes? ¿Qué fue?" },
+  { "type": "comodín", "text": "Si el universo tuviera un campo de «propósito» en su configuración, ¿qué le pondrías?" },
+  { "type": "opinión polémica", "text": "¿«Por qué existimos» es una pregunta de física o de filosofía? Elige un bando." },
+  { "type": "¿qué prefieres?", "text": "¿Preferirías saber exactamente cómo termina el universo o exactamente cómo empezó?" },
+  { "type": "explícalo", "text": "¿Qué concepto asentiste sin entenderlo del todo? Intenta explicarlo igual." },
+  { "type": "comodín", "text": "¿Qué cosa cotidiana a tu alrededor se siente distinta ahora que sabes de qué está hecha?" }
+]
