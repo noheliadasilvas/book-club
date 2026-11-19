@@ -4,9 +4,10 @@ export type Book = { id: string; title: string; author: string; chapters: string
 export type ChapterProgress = { status: 'reading' | 'done'; startedAt?: string; doneAt?: string } // ISO dates (YYYY-MM-DD)
 // person -> bookId -> chapter index -> progress
 export type Progress = Record<string, Record<string, Record<number, ChapterProgress>>>
-export type Answer = { person: string; week: number; text: string; mindBlown?: number; at: string }
+export type Answer = { person: string; week: number; q?: number; text: string; mindBlown?: number; at: string }
 export type Note = { person: string; bookId: string; chapter: number; quote: string; confused: boolean; at: string }
-export interface State { books: Book[]; currentBookId: string; progress: Progress; answers: Answer[]; notes: Note[] }
+export type CustomQuestion = { week: number; text: string; person: string }
+export interface State { customQuestions: CustomQuestion[]; books: Book[]; currentBookId: string; progress: Progress; answers: Answer[]; notes: Note[] }
 
 export interface Storage { load(defaults: State): State; save(s: State): void }
 
