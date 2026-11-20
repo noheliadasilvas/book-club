@@ -1,13 +1,13 @@
 // Firebase sync. Layout in Firestore:
-//   clubs/{sha256(club code)}                 -> shared: books, currentBookId
-//   clubs/{sha256(club code)}/people/{name}   -> that person's progress, answers, notes, own questions
+//   clubs/bicho                 -> shared: books, currentBookId
+//   clubs/bicho/people/{name}   -> that person's progress, answers, notes, own questions
 // Each person only writes their own people doc, so the two of you never overwrite each other.
 import { initializeApp } from 'firebase/app'
-import { getAuth, signInAnonymously } from 'firebase/auth'
+import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth'
 import { getFirestore, doc, collection, onSnapshot, setDoc } from 'firebase/firestore'
 import type { State, Book } from './storage'
 
-// These identify the project and are public by design. Access is protected by the Firestore rules + the secret club code.
+// These identify the project and are public by design. Access is protected by Google sign-in + the Firestore rules, which only allow the two club emails.
 const app = initializeApp({
   apiKey: 'AIzaSyAHtTjB6AzOiDnJxmipLQwOfKopNrCGScg',
   authDomain: 'book-club-2705c.firebaseapp.com',
@@ -21,10 +21,10 @@ const db = getFirestore(app)
 
 const clean = <T,>(x: T): T => JSON.parse(JSON.stringify(x)) // Firestore rejects `undefined`
 
-async function hashCode(code: string) {
-  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code.trim().toLowerCase()))
-  return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, '0')).join('')
-}
+const CLUB = 'bicho'
+export const watchUser = (cb: (u: User | null) => void) => onAuthStateChanged(auth, cb)
+export const signInGoogle = () => signInWithPopup(auth, new GoogleAuthProvider())
+export const signOutUser = () => signOut(auth)
 
 let cid = ''
 let club: { books?: Record<string, Book>; currentBookId?: string } = {}
@@ -33,13 +33,12 @@ let unsubs: (() => void)[] = []
 
 export type Status = 'off' | 'connecting' | 'on' | 'error'
 
-export async function connect(opts: { code: string; me: string; state: State; defaultBook: Book; onChange: () => void; onStatus: (s: Status, msg?: string) => void }) {
-  const { code, me, state, defaultBook, onChange, onStatus } = opts
+export async function connect(opts: { me: string; state: State; defaultBook: Book; onChange: () => void; onStatus: (s: Status, msg?: string) => void }) {
+  const { me, state, defaultBook, onChange, onStatus } = opts
   disconnect()
   onStatus('connecting')
   try {
-    await signInAnonymously(auth)
-    cid = await hashCode(code)
+    cid = CLUB
     pushMine(me, state, true) // send what is already on this device first, so it is not lost
     const merge = () => {
       state.books = [defaultBook, ...Object.values(club.books ?? {}).filter(b => b.id !== defaultBook.id)]

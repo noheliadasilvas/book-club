@@ -2,7 +2,7 @@ import './style.css'
 import questions from './questions.json'
 import { CLUB_NAME, START_DATE, PEOPLE, DEFAULT_BOOK } from './config'
 import { localStorageBackend as store, type State, type Book } from './storage'
-import { connect, disconnect, pushMine, type Status } from './sync'
+import { connect, disconnect, pushMine, watchUser, signInGoogle, signOutUser, type Status } from './sync'
 
 const state: State = store.load({ customQuestions: [], books: [DEFAULT_BOOK], currentBookId: DEFAULT_BOOK.id, progress: {}, answers: [], notes: [] })
 // The starting book's chapter list always comes from config.ts, so edits there show up
@@ -21,16 +21,15 @@ const week = Math.max(1, Math.floor((Date.now() - new Date(START_DATE).getTime()
 const wk = (w: number) => questions[(w - 1) % questions.length] // after week 10 the questions start over
 const save = (withClub = false) => { store.save(state); pushMine(me, state, withClub); render() }
 
-// ---- sync with Firebase (needs the secret club code, typed once per device) ----
-let syncStatus: Status = 'off'
+// ---- sync with Firebase (Google sign-in; only the two club emails are allowed by the Firestore rules) ----
+let syncStatus: Status = 'connecting' // until we know whether someone is signed in
 let syncMsg = ''
+let userEmail = ''
 let pendingRender = false
 const typing = () => ['TEXTAREA', 'INPUT'].includes(document.activeElement?.tagName ?? '')
 function startSync() {
-  const code = localStorage.getItem('bicho-club-code')
-  if (!code) { syncStatus = 'off'; return }
   connect({
-    code, me, state, defaultBook: DEFAULT_BOOK,
+    me, state, defaultBook: DEFAULT_BOOK,
     onChange: () => { store.save(state); typing() ? (pendingRender = true) : render() },
     onStatus: (s, msg) => { syncStatus = s; syncMsg = msg ?? ''; if (!typing()) render() },
   })
@@ -39,10 +38,11 @@ app.addEventListener('focusout', () => setTimeout(() => { if (pendingRender && !
 
 function syncBanner() {
   if (syncStatus === 'off') return `<div class="card"><p class="tag">sincronizar</p>
-    <form id="codeform"><input name="code" placeholder="Código secreto del club (el mismo para las dos)" required><button>Conectar</button></form>
-    <p class="muted">Hasta que lo pongas, tus datos solo viven en este dispositivo.</p></div>`
+    <button id="login">Entrar con Google</button>
+    ${syncMsg ? `<p class="muted">⚠️ ${esc(syncMsg)}</p>` : ''}
+    <p class="muted">Hasta que entres, tus datos solo viven en este dispositivo.</p></div>`
   const label = syncStatus === 'on' ? '☁️ sincronizado' : syncStatus === 'connecting' ? '⏳ conectando…' : `⚠️ sin conexión (${esc(syncMsg)})`
-  return `<p class="muted">${label} · <a href="#" id="chgcode">cambiar código</a></p>`
+  return `<p class="muted">${label} · ${esc(userEmail)} · <a href="#" id="logout">salir</a></p>`
 }
 
 const book = () => state.books.find(b => b.id === state.currentBookId) ?? state.books[0]
@@ -159,12 +159,10 @@ function render() {
 
   app.querySelector<HTMLSelectElement>('#me')!.onchange = e => { me = (e.target as HTMLSelectElement).value; localStorage.setItem('bicho-me', me); render() }
   app.querySelectorAll<HTMLButtonElement>('nav button').forEach(b => b.onclick = () => { tab = b.dataset.tab as Tab; render() })
-  app.querySelector<HTMLFormElement>('#codeform')?.addEventListener('submit', e => {
-    e.preventDefault(); localStorage.setItem('bicho-club-code', String(new FormData(e.target as HTMLFormElement).get('code')).trim()); startSync()
+  app.querySelector<HTMLButtonElement>('#login')?.addEventListener('click', () => {
+    signInGoogle().catch(e => { syncStatus = 'off'; syncMsg = (e as Error).message; render() })
   })
-  app.querySelector<HTMLAnchorElement>('#chgcode')?.addEventListener('click', e => {
-    e.preventDefault(); disconnect(); localStorage.removeItem('bicho-club-code'); syncStatus = 'off'; render()
-  })
+  app.querySelector<HTMLAnchorElement>('#logout')?.addEventListener('click', e => { e.preventDefault(); signOutUser() })
   app.querySelector<HTMLFormElement>('#addq')?.addEventListener('submit', e => {
     e.preventDefault()
     state.customQuestions.push({ id: crypto.randomUUID(), at: new Date().toISOString(), week, text: String(new FormData(e.target as HTMLFormElement).get('text')).trim(), person: me }); save()
@@ -192,4 +190,7 @@ function render() {
   })
 }
 render()
-startSync()
+watchUser(u => {
+  if (u) { userEmail = u.email ?? ''; syncStatus = 'connecting'; syncMsg = ''; render(); startSync() }
+  else { disconnect(); userEmail = ''; syncStatus = 'off'; render() }
+})
