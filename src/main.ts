@@ -2,6 +2,7 @@ import './style.css'
 import questions from './questions.json'
 import { CLUB_NAME, START_DATE, PEOPLE, DEFAULT_BOOK } from './config'
 import { localStorageBackend as store, type State, type Book } from './storage'
+import { connect, disconnect, pushMine, type Status } from './sync'
 
 const state: State = store.load({ customQuestions: [], books: [DEFAULT_BOOK], currentBookId: DEFAULT_BOOK.id, progress: {}, answers: [], notes: [] })
 // The starting book's chapter list always comes from config.ts, so edits there show up
@@ -18,7 +19,31 @@ const today = () => new Date().toISOString().slice(0, 10)
 const fmt = (d?: string) => d ? new Date(d + 'T12:00:00').toLocaleDateString('es', { month: 'short', day: 'numeric' }) : ''
 const week = Math.max(1, Math.floor((Date.now() - new Date(START_DATE).getTime()) / (7 * 864e5)) + 1)
 const wk = (w: number) => questions[(w - 1) % questions.length] // after week 10 the questions start over
-const save = () => { store.save(state); render() }
+const save = (withClub = false) => { store.save(state); pushMine(me, state, withClub); render() }
+
+// ---- sync with Firebase (needs the secret club code, typed once per device) ----
+let syncStatus: Status = 'off'
+let syncMsg = ''
+let pendingRender = false
+const typing = () => ['TEXTAREA', 'INPUT'].includes(document.activeElement?.tagName ?? '')
+function startSync() {
+  const code = localStorage.getItem('bicho-club-code')
+  if (!code) { syncStatus = 'off'; return }
+  connect({
+    code, me, state, defaultBook: DEFAULT_BOOK,
+    onChange: () => { store.save(state); typing() ? (pendingRender = true) : render() },
+    onStatus: (s, msg) => { syncStatus = s; syncMsg = msg ?? ''; if (!typing()) render() },
+  })
+}
+app.addEventListener('focusout', () => setTimeout(() => { if (pendingRender && !typing()) { pendingRender = false; render() } }, 400))
+
+function syncBanner() {
+  if (syncStatus === 'off') return `<div class="card"><p class="tag">sincronizar</p>
+    <form id="codeform"><input name="code" placeholder="Código secreto del club (el mismo para las dos)" required><button>Conectar</button></form>
+    <p class="muted">Hasta que lo pongas, tus datos solo viven en este dispositivo.</p></div>`
+  const label = syncStatus === 'on' ? '☁️ sincronizado' : syncStatus === 'connecting' ? '⏳ conectando…' : `⚠️ sin conexión (${esc(syncMsg)})`
+  return `<p class="muted">${label} · <a href="#" id="chgcode">cambiar código</a></p>`
+}
 
 const book = () => state.books.find(b => b.id === state.currentBookId) ?? state.books[0]
 const prog = (p: string, b: Book) => state.progress[p]?.[b.id] ?? {}
@@ -26,13 +51,13 @@ const doneCount = (p: string, b: Book) => Object.values(prog(p, b)).filter(c => 
 const isFinished = (p: string, b: Book) => b.chapters.length > 0 && doneCount(p, b) === b.chapters.length
 const finishDate = (p: string, b: Book) => Object.values(prog(p, b)).map(c => c.doneAt ?? '').sort().pop()
 
-const ansOf = (p: string, w: number, qi: number) => state.answers.find(x => x.person === p && x.week === w && (x.q ?? 0) === qi)
+const ansOf = (p: string, w: number, key: string) => state.answers.find(x => x.person === p && x.week === w && String(x.q ?? 0) === key)
 const shown = (a: { person: string; text: string; mindBlown?: number }) => `<blockquote><b>${esc(a.person)}</b>: ${esc(a.text)}${a.mindBlown ? ` <span class="muted">(🤯 ${a.mindBlown}/10)</span>` : ''}</blockquote>`
 
 // The 3 questions of the week plus any the two of you added (customs are never deleted, so their index stays stable).
 function questionsFor(w: number) {
-  const base = wk(w).questions.map(text => ({ text, by: '' }))
-  const extra = state.customQuestions.filter(c => c.week === w).map(c => ({ text: c.text, by: c.person }))
+  const base = wk(w).questions.map((text, i) => ({ key: String(i), text, by: '' }))
+  const extra = state.customQuestions.filter(c => c.week === w).sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id)).map(c => ({ key: `c:${c.id}`, text: c.text, by: c.person }))
   return [...base, ...extra]
 }
 const byLabel = (by: string) => by ? ` <span class="chip">pregunta de ${esc(by)}</span>` : ''
@@ -40,10 +65,10 @@ const byLabel = (by: string) => by ? ` <span class="chip">pregunta de ${esc(by)}
 function weekView() {
   const c = wk(week)
   return `<p class="tag">semana ${week} · ${esc(c.chapter)}</p><h2>${esc(c.title)}</h2>` + questionsFor(week).map((item, i) => {
-    const mine = ansOf(me, week, i)
-    const others = PEOPLE.filter(p => p !== me).map(p => ansOf(p, week, i)).filter(a => !!a)
+    const mine = ansOf(me, week, item.key)
+    const others = PEOPLE.filter(p => p !== me).map(p => ansOf(p, week, item.key)).filter(a => !!a)
     return `<div class="card"><b>${i + 1}. ${esc(item.text)}</b>${byLabel(item.by)}
-      <form class="answer" data-q="${i}">
+      <form class="answer" data-q="${item.key}">
         <textarea name="text" rows="3" placeholder="Tu respuesta…" required>${esc(mine?.text ?? '')}</textarea>
         <button>${mine ? 'Actualizar' : 'Publicar'} respuesta</button>
       </form>
@@ -58,9 +83,9 @@ function answersView() {
   return `<h2>Preguntas y respuestas</h2>` + weeks.map(w => {
     const c = wk(w)
     return `<div class="card"><p class="tag">semana ${w} · ${esc(c.chapter)}</p><h3>${esc(c.title)}</h3>` + questionsFor(w).map((item, i) => {
-      const mine = ansOf(me, w, i)
+      const mine = ansOf(me, w, item.key)
       const rows = PEOPLE.map(p => {
-        const a = ansOf(p, w, i)
+        const a = ansOf(p, w, item.key)
         if (!a) return `<div class="muted">${esc(p)}: sin responder</div>`
         if (p !== me && !mine) return `<div class="muted">${esc(p)}: ya respondió 🔒 (publica la tuya para verla)</div>`
         return shown(a)
@@ -127,19 +152,26 @@ function render() {
         <header><h1>🐛📚 ${esc(CLUB_NAME)}</h1>
           <label>Soy <select id="me">${PEOPLE.map(p => `<option ${p === me ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
         </header>
+        ${syncBanner()}
         <main>${{ week: weekView, answers: answersView, reading: readingView, books: booksView, notes: notesView }[tab]()}</main>
       </div>
     </div>`
 
   app.querySelector<HTMLSelectElement>('#me')!.onchange = e => { me = (e.target as HTMLSelectElement).value; localStorage.setItem('bicho-me', me); render() }
   app.querySelectorAll<HTMLButtonElement>('nav button').forEach(b => b.onclick = () => { tab = b.dataset.tab as Tab; render() })
+  app.querySelector<HTMLFormElement>('#codeform')?.addEventListener('submit', e => {
+    e.preventDefault(); localStorage.setItem('bicho-club-code', String(new FormData(e.target as HTMLFormElement).get('code')).trim()); startSync()
+  })
+  app.querySelector<HTMLAnchorElement>('#chgcode')?.addEventListener('click', e => {
+    e.preventDefault(); disconnect(); localStorage.removeItem('bicho-club-code'); syncStatus = 'off'; render()
+  })
   app.querySelector<HTMLFormElement>('#addq')?.addEventListener('submit', e => {
     e.preventDefault()
-    state.customQuestions.push({ week, text: String(new FormData(e.target as HTMLFormElement).get('text')).trim(), person: me }); save()
+    state.customQuestions.push({ id: crypto.randomUUID(), at: new Date().toISOString(), week, text: String(new FormData(e.target as HTMLFormElement).get('text')).trim(), person: me }); save()
   })
   app.querySelectorAll<HTMLFormElement>('form.answer').forEach(f => f.addEventListener('submit', e => {
-    e.preventDefault(); const qi = Number(f.dataset.q)
-    state.answers = state.answers.filter(a => !(a.person === me && a.week === week && (a.q ?? 0) === qi))
+    e.preventDefault(); const qi = f.dataset.q!
+    state.answers = state.answers.filter(a => !(a.person === me && a.week === week && String(a.q ?? 0) === qi))
     state.answers.push({ person: me, week, q: qi, text: String(new FormData(f).get('text')), at: new Date().toISOString() }); save()
   }))
   app.querySelectorAll<HTMLSelectElement>('select[data-chapter]').forEach(s => s.onchange = () => {
@@ -148,11 +180,11 @@ function render() {
     else mine[i] = { status: s.value as 'reading' | 'done', startedAt: mine[i]?.startedAt ?? today(), doneAt: s.value === 'done' ? today() : undefined }
     save()
   })
-  app.querySelectorAll<HTMLButtonElement>('button[data-current]').forEach(b => b.onclick = () => { state.currentBookId = b.dataset.current!; save() })
+  app.querySelectorAll<HTMLButtonElement>('button[data-current]').forEach(b => b.onclick = () => { state.currentBookId = b.dataset.current!; save(true) })
   app.querySelector<HTMLFormElement>('#addbook')?.addEventListener('submit', e => {
     e.preventDefault(); const f = new FormData(e.target as HTMLFormElement), n = Number(f.get('n')) || 1
     const nb: Book = { id: crypto.randomUUID(), title: String(f.get('title')), author: String(f.get('author')), chapters: Array.from({ length: n }, (_, i) => `Capítulo ${i + 1}`) }
-    state.books.push(nb); state.currentBookId = nb.id; save()
+    state.books.push(nb); state.currentBookId = nb.id; save(true)
   })
   app.querySelector<HTMLFormElement>('#note')?.addEventListener('submit', e => {
     e.preventDefault(); const f = new FormData(e.target as HTMLFormElement)
@@ -160,3 +192,4 @@ function render() {
   })
 }
 render()
+startSync()
